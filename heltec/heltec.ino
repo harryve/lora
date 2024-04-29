@@ -1,26 +1,25 @@
-
-// Turns the 'PRG' button into the power button, long press is off 
-//#define HELTEC_POWER_BUTTON   // must be before "#include <heltec.h>"
-#define NO_DISPLAY
-#include <heltec.h>
-
-// Pause between transmited packets in seconds.
-// Set to zero to only transmit a packet when pressing the user button
-// Will not exceed 1% duty cycle, even if you set a lower value.
-//#define PAUSE               300
-
-// Frequency in MHz. Keep the decimal point to designate float.
-// Check your own rules and regulations to see what is legal where you are.
-#define FREQUENCY           868.0       // for Europe
-// #define FREQUENCY           905.2       // for US
-
-// LoRa bandwidth. Keep the decimal point to designate float.
-// Allowed values are 7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125.0, 250.0 and 500.0 kHz.
+//#include <Arduino.h>
+//#include <Wire.h>
+#include <AM2315C.h>
+//#define NO_DISPLAY
+#include <heltec_unofficial.h>
+#define FREQUENCY           868.0
 #define BANDWIDTH           125.0
-
-// Number from 5 to 12. Higher means slower but higher "processor gain",
-// meaning (in nutshell) longer range and more robust against interference. 
 #define SPREADING_FACTOR    7
+#define TRANSMIT_POWER      0
+
+#define I2C_SDA                     33
+#define I2C_SCL                     34
+
+#ifndef HELTEC_WIRELESS_STICK_LITE
+error
+#endif
+
+#ifndef HELTEC_NO_DISPLAY
+error
+#endif
+
+AM2315C amSensor;
 
 bool rxFlag;
 uint8_t rxdata[64];
@@ -34,15 +33,18 @@ struct __attribute__ ((packed)) LoraMsg {
 };
 
 
-void setup() {
-  heltec_setup();
+void setup() 
+{
+  Serial.begin(115200);
+  Serial.println("initBoard....");
+
   Serial.println("Radio init");
   //RADIOLIB_OR_HALT(radio.begin());
   radio.begin();
   // Set the callback function for received packets
   radio.setDio1Action(rx);
   // Set radio parameters
-  both.printf("Frequency: %.2f MHz\n", FREQUENCY);
+  Serial.printf("Frequency: %.2f MHz\n", FREQUENCY);
   //RADIOLIB_OR_HALT(radio.setFrequency(FREQUENCY));
   radio.setFrequency(FREQUENCY);
   Serial.printf("Bandwidth: %.1f kHz\n", BANDWIDTH);
@@ -51,18 +53,55 @@ void setup() {
   Serial.printf("Spreading Factor: %i\n", SPREADING_FACTOR);
   //RADIOLIB_OR_HALT(radio.setSpreadingFactor(SPREADING_FACTOR));
   radio.setSpreadingFactor(SPREADING_FACTOR);
-  //Serial.printf("TX power: %i dBm\n", TRANSMIT_POWER);
-  //RADIOLIB_OR_HALT(radio.setOutputPower(TRANSMIT_POWER));
+  
+  Serial.printf("TX power: %i dBm\n", TRANSMIT_POWER);
+  radio.setOutputPower(TRANSMIT_POWER);
   // Start receiving
   //RADIOLIB_OR_HALT(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF));
   radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF);
 
   rxFlag = false;
+
+  heltec_ve(true);
+
+  Serial.printf("Init AM2315C %ld\n", millis());
+  Wire.begin(I2C_SDA, I2C_SCL); //, 100000);
+  Serial.printf("Sensor begin %ld\n", millis());
+  amSensor.begin();
+  Serial.printf("Sensor done %ld\n", millis());
 }
 
-void loop() {
-  heltec_loop();
-  
+void loop() 
+{
+  static uint32_t lastSensRead = 0;
+  int status;  
+  float temp, hum, vbat;
+  //heltec_loop();
+
+  if (millis() - lastSensRead > 60000) {
+    lastSensRead = millis();
+ 
+    //Serial.printf("Read sensor %ld\n", millis());
+    if ((status = amSensor.read()) == AM2315C_OK) {
+     //Serial.printf("Read done %ld\n", millis());
+     temp = amSensor.getTemperature();
+     hum = amSensor.getHumidity();
+    }
+    else {
+      temp = 0.0;
+      hum = 0.0;
+      Serial.print("AM2315C read error: ");
+      Serial.println(status);
+    }
+
+    Serial.print("Hum = ");
+    Serial.print(hum, 1);
+    Serial.print("%%, temperature = ");
+    Serial.print(temp, 1);
+    Serial.println(" C");
+
+    //Serial.printf("Done sensor\n");
+  }
   //bool tx_legal = millis() > last_tx + minimum_pause;
   // Transmit a packet every PAUSE seconds or when the button is pressed
   //if ((PAUSE && tx_legal && millis() - last_tx > (PAUSE * 1000)) || button.isS/ingleClick()) {
@@ -91,6 +130,7 @@ void loop() {
   //}
 
   // If a packet was received, display it and the RSSI and SNR
+
   if (rxFlag) {
     heltec_led(100);
     struct LoraMsg loraMsg;
