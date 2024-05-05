@@ -18,40 +18,40 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C *u8g2 = nullptr;
 WiFiClient wifiClient;
 MqttClient mqttClient(wifiClient);
 
-const char topic[]  = "tele/lorasensor/sensor";
+const char topic1[]  = "tele/lorasensor/sensor";
+const char topic2[]  = "tele/lorasensor2/sensor";
 
 struct __attribute__ ((packed)) LoraMsg {
-  uint32_t  id;
-  uint16_t  seq;
-  int16_t temperature;
-  int8_t humidity;
-  int16_t vbat;
+  uint32_t id;
+  uint16_t seq;
+  int16_t  temperature;
+  int8_t   humidity;
+  int16_t  vbat;
+  uint16_t runtime;  
 };
 
 void setup()
 {
-    Serial.begin(115200);
-    Serial.println("initBoard....");
-    SPI.begin(RADIO_SCLK_PIN, RADIO_MISO_PIN, RADIO_MOSI_PIN);
-    Wire.begin(I2C_SDA, I2C_SCL); //, 100000);
+  Serial.begin(115200);
+  Serial.println("initBoard....");
+  SPI.begin(RADIO_SCLK_PIN, RADIO_MISO_PIN, RADIO_MOSI_PIN);
+  Wire.begin(I2C_SDA, I2C_SCL); //, 100000);
 
 #ifdef BOARD_LED
-    pinMode(BOARD_LED, OUTPUT);
-    digitalWrite(BOARD_LED, LED_ON);
+  pinMode(BOARD_LED, OUTPUT);
+  digitalWrite(BOARD_LED, LED_ON);
 #endif
 
-    DisplayInit();
+  DisplayInit();
 
-    Serial.print("Connect to WiFi");
-    WiFi.setHostname("LoRaBridge");
-    WiFi.begin(ssid, pass);
-    while (WiFi.status() != WL_CONNECTED) {
-      Serial.print(".");
-      delay(5000);
-    }
-    Serial.print("\nConnected\n");
-    // When the power is turned on, a delay is required.
-    //delay(1000);
+  Serial.print("Connect to WiFi");
+  WiFi.setHostname("LoRaBridge");
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(5000);
+  }
+  Serial.print("\nConnected\n");
 
   mqttClient.setId("LoRaBridge");
   Serial.print("Attempting to connect to the MQTT broker: ");
@@ -64,17 +64,29 @@ void setup()
     Serial.println();
   }
 
-
-
-    Serial.println("LoRa Receiver " __DATE__ ", " __TIME__);
-    LoRa.setPins(RADIO_CS_PIN, RADIO_RST_PIN, RADIO_DIO0_PIN);
-    if (!LoRa.begin(LoRa_frequency)) {
-        Serial.println("Starting LoRa failed!");
-        while (1);
-    }
-    LoRa.enableCrc();
+  Serial.println("LoRa Receiver " __DATE__ ", " __TIME__);
+  LoRa.setPins(RADIO_CS_PIN, RADIO_RST_PIN, RADIO_DIO0_PIN);
+  if (!LoRa.begin(LoRa_frequency)) {
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+  LoRa.enableCrc();
 }
 
+int check_sensor(uint32_t id)
+{
+  switch(id) {
+    case 0x48764531:
+      return 1;
+      
+    case 0x48764532:
+      return 2;
+    
+    default:
+      Serial.printf("Wrong sensor ID: %x\n", id);
+  }
+  return 0;
+}
 void loop()
 {
   struct LoraMsg loraMsg;
@@ -82,31 +94,34 @@ void loop()
   char vbatbuf[16];
   char snrbuf[16];
   uint32_t dispOn = millis();
+  int sensor;
 
   for (;;) {
     mqttClient.poll();
 
   // Wait for packet
-    int packetSize = LoRa.parsePacket();
-    if (packetSize) {
-      // received a packet
-      Serial.printf("\nReceived packet. Size = %d, expected %d\n", packetSize, sizeof(loraMsg));
+  int packetSize = LoRa.parsePacket();
+  if (packetSize > 0) {
+    Serial.printf("\nReceived packet, size = %d\n", packetSize);
+  }
+  if (packetSize == sizeof(loraMsg)) {
+    // received a packet
+    Serial.printf("\nReceived packet\n");
 
-      uint8_t *p = (uint8_t *)&loraMsg;
-      for (int i = 0; i < packetSize; i++) {
-        p[i] = (uint8_t)LoRa.read();
-      }
-      int rssi = LoRa.packetRssi();
-      float snr = LoRa.packetSnr();
+    uint8_t *p = (uint8_t *)&loraMsg;
+    for (int i = 0; i < packetSize; i++) {
+      p[i] = (uint8_t)LoRa.read();
+    }
+    int rssi = LoRa.packetRssi();
+    float snr = LoRa.packetSnr();
 
-      if (loraMsg.id != 0x48764531) {
-        Serial.printf("Wrong sensor ID: %x, expected %x", loraMsg.id, 0x48764531);
-      }
-      else {
-        Serial.printf("Counter     = %d\n", loraMsg.seq);
-        Serial.printf("Temperature = %d\n", loraMsg.temperature);
-        Serial.printf("Humidity    = %d\n", loraMsg.humidity);        // %
-        Serial.printf("Vbat        = %d\n", loraMsg.vbat);   // mv
+    if ((sensor = check_sensor(loraMsg.id)) > 0) {
+      Serial.printf("Sensor      = %d\n", sensor);
+      Serial.printf("Counter     = %d\n", loraMsg.seq);
+      Serial.printf("Temperature = %d\n", loraMsg.temperature);
+      Serial.printf("Humidity    = %d\n", loraMsg.humidity);        // %
+      Serial.printf("Vbat        = %d\n", loraMsg.vbat);   // mv
+      Serial.printf("runtime     = %d\n", loraMsg.runtime);   // ms
 
 #ifdef USE_DISPLAY
         if (u8g2) {
@@ -136,10 +151,11 @@ void loop()
         doc["rssi"] = rssi;
         snprintf(snrbuf, sizeof(snrbuf), "%.1f", snr);
         doc["snr"] = snrbuf;
+        doc["runtime"] = loraMsg.runtime;
         String msg;
         serializeJson(doc, msg);
 
-        mqttClient.beginMessage(topic);
+        mqttClient.beginMessage(sensor == 1 ? topic1 : topic2);
         mqttClient.print(msg.c_str());
         mqttClient.endMessage();
       }
