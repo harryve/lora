@@ -8,6 +8,7 @@
 #include "hwdefs.h"
 
 RTC_DATA_ATTR int counter = 0;
+RTC_DATA_ATTR uint32_t runtime = 0;
 
 AM2315C sensor;
 ESP32AnalogRead adc;
@@ -24,6 +25,7 @@ struct __attribute__ ((packed)) LoraMsg {
   int16_t temperature;
   int8_t humidity;
   int16_t vbat;
+  uint16_t  runtime;
 };
 
 void GoToSleep()
@@ -55,7 +57,8 @@ void GoToSleep()
 #endif
     pinMode(ADC_PIN, INPUT);
 
-    esp_sleep_enable_timer_wakeup((5*60 + 1) * (1000*1000));
+    runtime = millis();
+    esp_sleep_enable_timer_wakeup(5*60 * (1000*1000));
     esp_deep_sleep_start();
 }
 
@@ -79,7 +82,7 @@ void setup()
     }
 
     // When the power is turned on, a delay is required.
-    delay(1000);
+    //delay(1000);
 
     Serial.println("LoRa Sender " __DATE__ ", " __TIME__);
     LoRa.setPins(RADIO_CS_PIN, RADIO_RST_PIN, RADIO_DIO0_PIN);
@@ -110,7 +113,7 @@ void loop()
 
   Serial.print("Hum = ");
   Serial.print(hum, 1);
-  Serial.print("%%, temperature = ");
+  Serial.print("%, temperature = ");
   Serial.print(temp, 1);
   Serial.println(" C");
 
@@ -124,7 +127,8 @@ void loop()
   loraMsg.temperature = round(temp*10); // Tenths degeree Celcius
   loraMsg.humidity = round(hum);        // %
   loraMsg.vbat = round(vbat* 1000.0);   // mv
-
+  loraMsg.runtime = (uint16_t)runtime;
+  
   LoRa.enableCrc();
   LoRa.beginPacket();
   LoRa.write((const uint8_t *)&loraMsg, sizeof(loraMsg));
