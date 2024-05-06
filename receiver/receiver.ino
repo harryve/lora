@@ -8,6 +8,7 @@
 
 #include "hwdefs.h"
 #include "credentials.h"
+#include "loramsg.h"
 
 #ifdef USE_DISPLAY
 #include <U8g2lib.h>
@@ -20,15 +21,6 @@ MqttClient mqttClient(wifiClient);
 
 const char topic1[]  = "tele/lorasensor/sensor";
 const char topic2[]  = "tele/lorasensor2/sensor";
-
-struct __attribute__ ((packed)) LoraMsg {
-  uint32_t id;
-  uint16_t seq;
-  int16_t  temperature;
-  int8_t   humidity;
-  int16_t  vbat;
-  uint16_t runtime;  
-};
 
 void setup()
 {
@@ -76,10 +68,10 @@ void setup()
 int check_sensor(uint32_t id)
 {
   switch(id) {
-    case 0x48764531:
+    case SENSOR1_ID:
       return 1;
       
-    case 0x48764532:
+    case SENSOR2_ID:
       return 2;
     
     default:
@@ -101,13 +93,8 @@ void loop()
 
   // Wait for packet
   int packetSize = LoRa.parsePacket();
-  if (packetSize > 0) {
-    Serial.printf("\nReceived packet, size = %d\n", packetSize);
-  }
   if (packetSize == sizeof(loraMsg)) {
     // received a packet
-    Serial.printf("\nReceived packet\n");
-
     uint8_t *p = (uint8_t *)&loraMsg;
     for (int i = 0; i < packetSize; i++) {
       p[i] = (uint8_t)LoRa.read();
@@ -122,7 +109,7 @@ void loop()
       Serial.printf("Humidity    = %d\n", loraMsg.humidity);        // %
       Serial.printf("Vbat        = %d\n", loraMsg.vbat);   // mv
       Serial.printf("runtime     = %d\n", loraMsg.runtime);   // ms
-
+      Serial.printf("illuminance = %d\n", loraMsg.illuminance);
 #ifdef USE_DISPLAY
         if (u8g2) {
           u8g2->sleepOff();
@@ -152,6 +139,7 @@ void loop()
         snprintf(snrbuf, sizeof(snrbuf), "%.1f", snr);
         doc["snr"] = snrbuf;
         doc["runtime"] = loraMsg.runtime;
+        doc["illuminance"] = loraMsg.illuminance;
         String msg;
         serializeJson(doc, msg);
 

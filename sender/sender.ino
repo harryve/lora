@@ -4,7 +4,7 @@
 #include <LoRa.h>
 #include <ESP32AnalogRead.h>
 #include <AM2315C.h>
-
+#include "loramsg.h"
 #include "hwdefs.h"
 
 RTC_DATA_ATTR int counter = 0;
@@ -18,15 +18,6 @@ ESP32AnalogRead adc;
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C *u8g2 = nullptr;
 #include "display.h"
 #endif
-
-struct __attribute__ ((packed)) LoraMsg {
-  uint32_t  id;
-  uint16_t  seq;
-  int16_t temperature;
-  int8_t humidity;
-  int16_t vbat;
-  uint16_t  runtime;
-};
 
 void GoToSleep()
 {
@@ -128,6 +119,7 @@ void loop()
   loraMsg.humidity = round(hum);        // %
   loraMsg.vbat = round(vbat* 1000.0);   // mv
   loraMsg.runtime = (uint16_t)runtime;
+  loraMsg.illuminance = 0;
   
   LoRa.enableCrc();
   LoRa.beginPacket();
