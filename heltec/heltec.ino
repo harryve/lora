@@ -1,7 +1,10 @@
+#include <ArduinoOTA.h>
+#include <WiFi.h>
 #include <AM2315C.h>
 #include <BH1750.h>
 #include <heltec_unofficial.h>
 #include "loramsg.h"
+#include "credentials.h"
 
 #define FREQUENCY           868.0
 #define BANDWIDTH           125.0
@@ -10,6 +13,7 @@
 
 #define I2C_SDA                     33
 #define I2C_SCL                     34
+#define CHARGE_ADC          GPIO_NUM_3
 
 RTC_DATA_ATTR int counter = 0;
 RTC_DATA_ATTR uint32_t runtime = 0;
@@ -17,38 +21,101 @@ RTC_DATA_ATTR uint32_t runtime = 0;
 AM2315C thSensor;
 BH1750 lightMeter;
 
+static int lightMeterStart;
 
-void setup() 
+static bool isCharging()
+{
+  if (analogRead(CHARGE_ADC) > 500.0) {
+    return true;
+  }
+  return false;
+}
+
+void setup()
 {
   Serial.begin(115200);
-  //Serial.println("");
-  //Serial.println("initBoard...");
+  Serial.printf("\nInit balkon sensor %s %s at %ld\n", __DATE__, __TIME__, millis());
 
   heltec_ve(true);
 
-  //Serial.printf("Init I2C %ld\n", millis());
+  Serial.printf("Init I2C %ld\n", millis());
   Wire.begin(I2C_SDA, I2C_SCL); //, 100000);
   thSensor.begin();
-  lightMeter.begin(BH1750::ONE_TIME_HIGH_RES_MODE);
-  //Serial.printf("Sensors done %ld\n", millis());
+  thSensor.requestData();
 
-  //Serial.println("Radio init");
-  //RADIOLIB_OR_HALT(radio.begin());
-  radio.begin();
-  radio.setFrequency(FREQUENCY);
-  radio.setBandwidth(BANDWIDTH);
-  radio.setSpreadingFactor(SPREADING_FACTOR);
-  radio.setOutputPower(TRANSMIT_POWER);
-  radio.setCRC(2);
-  //Serial.printf("Init done %ld\n", millis());
+  lightMeter.begin(BH1750::ONE_TIME_HIGH_RES_MODE);
+  lightMeterStart = millis();
+  Serial.printf("Sensors done %ld\n", millis());
+
+  if ((radio.begin() != RADIOLIB_ERR_NONE) ||
+    (radio.setFrequency(FREQUENCY) != RADIOLIB_ERR_NONE) ||
+    (radio.setBandwidth(BANDWIDTH) != RADIOLIB_ERR_NONE) ||
+    (radio.setSpreadingFactor(SPREADING_FACTOR) != RADIOLIB_ERR_NONE) ||
+    (radio.setOutputPower(TRANSMIT_POWER) != RADIOLIB_ERR_NONE) ||
+    (radio.setCRC(2) != RADIOLIB_ERR_NONE)) {
+    Serial.printf("Radio init failed\n");
+    heltec_led(50);
+    delay(500);
+    heltec_deep_sleep(60);
+  }
+
+  Serial.printf("Radio init done %ld\n", millis());
+
+  if (isCharging()) {
+    Serial.print("Connect to WiFi");
+    WiFi.setHostname("balkonsensor");
+    WiFi.begin(ssid, pass);
+    while (WiFi.status() != WL_CONNECTED) {
+      Serial.print(".");
+      delay(500);
+    }
+    Serial.print("\nConnected\n");
+    heltec_led(50);
+    ArduinoOTA.setHostname("balkonsensor");
+    ArduinoOTA.onStart([]() {
+      Serial.println("Start");
+    });
+    ArduinoOTA.onEnd([]() {
+      Serial.println("\nEnd");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+      Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+      Serial.printf("Error[%u]: ", error);
+      if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+      else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+      else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+      else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+      else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });    
+    ArduinoOTA.begin();
+  }
 }
 
 void loop() 
 {
+  if (isCharging()) {
+    ChargeLoop();
+  }
+  else {
+    AccuLoop();
+  }
+}
+
+void ChargeLoop()
+{
+  ArduinoOTA.handle();
+}
+
+void AccuLoop()
+{
   int status;  
   float temp, hum;
 
-  if ((status = thSensor.read()) == AM2315C_OK) {
+  Serial.printf("loop %ld\n", millis());
+  thSensor.readData();
+  if ((status = thSensor.convert()) == AM2315C_OK) {
     temp = thSensor.getTemperature();
     hum = thSensor.getHumidity();
   }
@@ -57,28 +124,16 @@ void loop()
     hum = 0.0;
     Serial.printf("AM2315C read error: %d\n", status);
   }
+  Serial.printf("ht sensor done %ld\n", millis());
 
-  //  Serial.print("Hum = ");
-  //  Serial.print(hum, 1);
-  //  Serial.print("%, temperature = ");
-  //  Serial.print(temp, 1);
-  //  Serial.println(" C");
-  uint32_t start = millis();
-  while (!lightMeter.measurementReady(true)) {
-    yield();
+  while (millis() - lightMeterStart < 120) {
+    delay(1);
   }
-  //Serial.printf("Lightmeter took %d ms\n", millis() - start);
-
+  Serial.printf("Lightmeter done %ld\n", millis());
   float lux = lightMeter.readLightLevel();
-  //Serial.print("Light: ");
-  //Serial.print(lux);
-  //Serial.println(" lx");
-
-  //Serial.printf("TX %d\n", millis());
-  //heltec_led(50); // 50% brightness is plenty for this LED
 
   struct LoraMsg loraMsg;
-  loraMsg.id = 0x48764532;
+  loraMsg.id = SENSOR2_ID;
   loraMsg.seq = counter;
   loraMsg.temperature = round(temp*10); // Tenths degeree Celcius
   loraMsg.humidity = round(hum);        // %
@@ -87,17 +142,10 @@ void loop()
   loraMsg.runtime = (uint16_t)runtime;
 
   radio.transmit((uint8_t *)&loraMsg, sizeof(loraMsg));
-  Serial.printf("TX done %d\n", millis());
-
-  //heltec_led(0);
+  Serial.printf("TX done (t=%d, h=%d, l=%d) %d\n", loraMsg.temperature, loraMsg.humidity, loraMsg.illuminance, millis());
 
   counter += 1;
   runtime = millis();
 
-  heltec_deep_sleep(60);
+  heltec_deep_sleep(5 * 60);
 }
-
-// Can't do Serial or display things here, takes too much time for the interrupt
-//void rx() {
-//  rxFlag = true;
-//}
