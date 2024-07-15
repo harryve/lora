@@ -1,3 +1,5 @@
+//Board: TTGO LoRa32-OLED
+
 #include <math.h>
 #include <Arduino.h>
 #include <WiFi.h>
@@ -56,7 +58,7 @@ void setup()
     Serial.println();
   }
 
-  Serial.println("LoRa Receiver " __DATE__ ", " __TIME__);
+  Serial.println("LoRa Bridge " __DATE__ ", " __TIME__);
   LoRa.setPins(RADIO_CS_PIN, RADIO_RST_PIN, RADIO_DIO0_PIN);
   if (!LoRa.begin(LoRa_frequency)) {
     Serial.println("Starting LoRa failed!");
@@ -88,7 +90,27 @@ void loop()
   uint32_t dispOn = millis();
   int sensor;
 
+  unsigned long previousMillis = millis();
   for (;;) {
+    
+    unsigned long currentMillis = millis();
+    // if WiFi is down, try reconnecting
+    if (((WiFi.status() != WL_CONNECTED) || (mqttClient.connected() == 0)) && (currentMillis - previousMillis >= 60000)) {
+      Serial.print(millis());
+      Serial.println("Reconnecting to WiFi...");
+      mqttClient.stop();
+      WiFi.disconnect();
+      WiFi.reconnect();
+      previousMillis = currentMillis;
+      if (!mqttClient.connect("mqtt.harry.thuis", 1883)) {
+        Serial.print("MQTT connection failed! Error code = ");
+        Serial.println(mqttClient.connectError());
+      }
+      else { 
+        Serial.println("Connected to the MQTT broker!");
+        Serial.println();
+      }
+    }
     mqttClient.poll();
 
   // Wait for packet
